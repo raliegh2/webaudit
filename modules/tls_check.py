@@ -2,7 +2,7 @@
 
 import socket
 import ssl
-from datetime import datetime
+from datetime import datetime, timezone
 
 WEAK_PROTOCOLS = ["SSLv2", "SSLv3", "TLSv1", "TLSv1.1"]
 
@@ -27,8 +27,8 @@ def check_tls(host: str, port: int = 443) -> list:
 
                 not_after = cert.get("notAfter")
                 if not_after:
-                    expiry = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
-                    days_left = (expiry - datetime.utcnow()).days
+                    expiry = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+                    days_left = (expiry - datetime.now(timezone.utc)).days
                     if days_left < 0:
                         findings.append({
                             "category": "tls",
