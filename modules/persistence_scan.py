@@ -4,6 +4,20 @@ import os
 import platform
 import glob
 
+# Same suspicious-path signal used in process_scan.py — an autorun entry
+# pointing here is a stronger signal than one pointing at Program Files.
+SUSPICIOUS_PATH_FRAGMENTS = [
+    "/tmp/", "/dev/shm/", "\\appdata\\local\\temp\\", "\\public\\",
+    "\\users\\public\\", "/var/tmp/", "downloads",
+]
+
+
+def _severity_for_target(text: str) -> str:
+    lowered = text.lower()
+    if any(frag in lowered for frag in SUSPICIOUS_PATH_FRAGMENTS):
+        return "medium"
+    return "info"
+
 
 def _scan_windows_run_keys() -> list:
     findings = []
@@ -27,7 +41,7 @@ def _scan_windows_run_keys() -> list:
                         findings.append({
                             "category": "persistence",
                             "id": f"run-key-{name}",
-                            "severity": "info",
+                            "severity": _severity_for_target(str(value)),
                             "message": f"Autorun entry '{name}' -> {value} ({path})",
                         })
                         i += 1
@@ -50,7 +64,7 @@ def _scan_macos_launch_agents() -> list:
             findings.append({
                 "category": "persistence",
                 "id": f"launch-agent-{os.path.basename(plist)}",
-                "severity": "info",
+                "severity": _severity_for_target(plist),
                 "message": f"LaunchAgent/Daemon present: {plist}",
             })
     return findings
