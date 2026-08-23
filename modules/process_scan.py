@@ -1,6 +1,7 @@
 """Heuristic process scanning: suspicious paths, name-spoofing, resource outliers."""
 
 import os
+import time
 
 SUSPICIOUS_PATH_FRAGMENTS = [
     "/tmp/", "/dev/shm/", "\\AppData\\Local\\Temp\\", "\\Public\\",
@@ -14,6 +15,7 @@ SYSTEM_PROCESS_NAMES = {
 
 CPU_OUTLIER_THRESHOLD = 80.0
 MEM_OUTLIER_THRESHOLD = 50.0
+CPU_SAMPLE_INTERVAL = 0.2  # seconds between warm-up and real cpu_percent() reads
 
 
 def scan_processes() -> list:
@@ -29,13 +31,23 @@ def scan_processes() -> list:
         })
         return findings
 
-    for proc in psutil.process_iter(["pid", "name", "exe", "cpu_percent", "memory_percent"]):
+    # psutil.cpu_percent()/Process.cpu_percent() returns 0.0 on its first
+    # call for a given process — there's no prior sample to diff against.
+    # Prime every process once, wait briefly, then take the real reading.
+    procs = list(psutil.process_iter(["pid", "name", "exe", "memory_percent"]))
+    for p in procs:
+        try:
+            p.cpu_percent(interval=None)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    time.sleep(CPU_SAMPLE_INTERVAL)
+
+    for proc in procs:
         try:
             info = proc.info
             name = (info.get("name") or "").lower()
             exe = info.get("exe") or ""
 
-            # Suspicious execution path
             if exe and any(frag.lower() in exe.lower() for frag in SUSPICIOUS_PATH_FRAGMENTS):
                 findings.append({
                     "category": "process",
@@ -47,7 +59,6 @@ def scan_processes() -> list:
                     "action_target": info["pid"],
                 })
 
-            # Name-spoofing: system-sounding name running from a non-standard path
             if name in SYSTEM_PROCESS_NAMES and exe:
                 expected_dirs = ["system32", "syswow64", "/usr/", "/sbin/", "/bin/"]
                 if not any(d in exe.lower() for d in expected_dirs):
@@ -61,7 +72,10 @@ def scan_processes() -> list:
                         "action_target": info["pid"],
                     })
 
-            cpu = info.get("cpu_percent") or 0
+            try:
+                cpu = proc.cpu_percent(interval=None)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                cpu = 0
             mem = info.get("memory_percent") or 0
             if cpu > CPU_OUTLIER_THRESHOLD:
                 findings.append({
