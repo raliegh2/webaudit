@@ -6,6 +6,16 @@ from datetime import datetime, timezone
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 
 
+def _severity_rank(finding: dict) -> int:
+    """Sort key that never raises, even if a finding uses an unexpected
+    severity string — unknown severities sort last instead of crashing."""
+    sev = finding.get("severity", "info")
+    try:
+        return SEVERITY_ORDER.index(sev)
+    except ValueError:
+        return len(SEVERITY_ORDER)
+
+
 def build_report(results: list) -> dict:
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -28,16 +38,17 @@ def export_text(report: dict) -> str:
 
     for result in report["results"]:
         lines.append("")
-        lines.append(f"Target: {result['target']} ({result['url']})")
+        location = result.get("url") or result.get("target", "")
+        if location and location != result.get("target"):
+            lines.append(f"Target: {result['target']} ({location})")
+        else:
+            lines.append(f"Target: {result.get('target', location)}")
         lines.append(f"Score: {result['score']}/100  Grade: {result['grade']}")
         if result["errors"]:
             for err in result["errors"]:
                 lines.append(f"  [ERROR] {err}")
 
-        findings_by_sev = sorted(
-            result["findings"],
-            key=lambda f: SEVERITY_ORDER.index(f.get("severity", "info")),
-        )
+        findings_by_sev = sorted(result["findings"], key=_severity_rank)
         if not findings_by_sev:
             lines.append("  No findings.")
         for f in findings_by_sev:
@@ -58,10 +69,7 @@ def export_html(report: dict) -> str:
     for result in report["results"]:
         grade_color = grade_colors.get(result["grade"], "#616161")
         findings_html = ""
-        findings_by_sev = sorted(
-            result["findings"],
-            key=lambda f: SEVERITY_ORDER.index(f.get("severity", "info")),
-        )
+        findings_by_sev = sorted(result["findings"], key=_severity_rank)
         for f in findings_by_sev:
             color = sev_colors.get(f.get("severity", "info"), "#616161")
             findings_html += (
@@ -72,11 +80,12 @@ def export_html(report: dict) -> str:
             findings_html = "<li>No findings.</li>"
 
         errors_html = "".join(f"<li style='color:#b71c1c'>{e}</li>" for e in result["errors"])
+        location = result.get("url") or result.get("target", "")
 
         rows.append(f"""
         <div class="target-card">
           <h2>{result['target']}</h2>
-          <p class="url">{result['url']}</p>
+          <p class="url">{location}</p>
           <div class="score">
             <span class="grade" style="background:{grade_color}">{result['grade']}</span>
             <span class="score-num">{result['score']}/100</span>
