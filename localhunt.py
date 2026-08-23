@@ -18,7 +18,7 @@ For authorized use on systems you own or administer only.
 import argparse
 import platform
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from modules.process_scan import scan_processes
 from modules.persistence_scan import scan_persistence
@@ -79,7 +79,8 @@ def main():
 
     result = {
         "target": platform.node(),
-        "timestamp": datetime.utcnow().isoformat(),
+        "url": f"local://{platform.system().lower()}",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "findings": findings,
         "errors": [],
         "score": None,
