@@ -1,12 +1,4 @@
-"""Signature-based deep scan: ClamAV, YARA, and VirusTotal hash lookups.
-
-These checks require external tools/services:
-  - ClamAV: the `clamscan` binary must be installed and on PATH.
-  - YARA: requires `pip install yara-python`. Bundles a small generic rule set
-    and accepts an optional custom rules directory.
-  - VirusTotal: requires a free API key (https://www.virustotal.com/) and is
-    rate-limited to ~4 requests/minute on the free tier.
-"""
+"""Signature-based deep scan: ClamAV, YARA, and VirusTotal hash lookups."""
 
 import glob
 import hashlib
@@ -15,13 +7,42 @@ import shutil
 import subprocess
 import time
 
+# Deliberately narrow: common malware drop locations, not entire user
+# profiles. Scanning C:\Users or C:\ProgramData recursively can take a very
+# long time and reaches far more personal data than "malware hunting" needs.
 DEFAULT_SCAN_DIRS_BY_OS = {
-    "Windows": [r"C:\Users", r"C:\ProgramData"],
+    "Windows": [
+        os.path.expandvars(r"%USERPROFILE%\Downloads"),
+        os.environ.get("TEMP", r"C:\Windows\Temp"),
+    ],
     "Darwin": ["/tmp", os.path.expanduser("~/Downloads")],
     "Linux": ["/tmp", os.path.expanduser("~/Downloads")],
 }
 
-VT_RATE_LIMIT_SECONDS = 15  # ~4 requests/minute on free tier
+VT_RATE_LIMIT_SECONDS = 15
+MAX_FILE_MB = 50
+MAX_FILES_PER_SCAN = 3000
+
+
+def _iter_capped_files(dirs):
+    """Yield files under dirs, capped by size and total count so a scan
+    against a large directory tree can't run indefinitely."""
+    count = 0
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        for root, _, files in os.walk(d):
+            for fname in files:
+                if count >= MAX_FILES_PER_SCAN:
+                    return
+                fpath = os.path.join(root, fname)
+                try:
+                    if os.path.getsize(fpath) > MAX_FILE_MB * 1024 * 1024:
+                        continue
+                except OSError:
+                    continue
+                yield fpath
+                count += 1
 
 
 def run_clamav(scan_dirs=None) -> list:
@@ -107,25 +128,20 @@ def run_yara(rules_dir: str = None) -> list:
 
     import platform
     scan_dirs = DEFAULT_SCAN_DIRS_BY_OS.get(platform.system(), ["/tmp"])
-    for d in scan_dirs:
-        if not os.path.isdir(d):
+    for fpath in _iter_capped_files(scan_dirs):
+        try:
+            matches = rules.match(fpath, timeout=5)
+            if matches:
+                findings.append({
+                    "category": "deep-scan",
+                    "id": f"yara-match-{hashlib.md5(fpath.encode()).hexdigest()[:8]}",
+                    "severity": "high",
+                    "message": f"YARA rule(s) {[m.rule for m in matches]} matched: {fpath}",
+                    "action_type": "file",
+                    "action_target": fpath,
+                })
+        except Exception:
             continue
-        for root, _, files in os.walk(d):
-            for fname in files:
-                fpath = os.path.join(root, fname)
-                try:
-                    matches = rules.match(fpath, timeout=5)
-                    if matches:
-                        findings.append({
-                            "category": "deep-scan",
-                            "id": f"yara-match-{hashlib.md5(fpath.encode()).hexdigest()[:8]}",
-                            "severity": "high",
-                            "message": f"YARA rule(s) {[m.rule for m in matches]} matched: {fpath}",
-                            "action_type": "file",
-                            "action_target": fpath,
-                        })
-                except Exception:
-                    continue
 
     return findings
 
@@ -170,9 +186,9 @@ def run_virustotal(existing_findings: list, api_key: str) -> list:
                                    f"(SHA256 {digest}).",
                     })
             elif resp.status_code == 404:
-                pass  # Unknown hash — no verdict available.
+                pass
 
-            time.sleep(VT_RATE_LIMIT_SECONDS)  # respect free-tier rate limit
+            time.sleep(VT_RATE_LIMIT_SECONDS)
         except requests.exceptions.RequestException:
             continue
 
