@@ -11,9 +11,8 @@ def check_cookies(response) -> list:
         if not cookie.secure:
             flags_missing.append("Secure")
 
-        httponly = cookie.has_nonstandard_attr("HttpOnly") or cookie.get_nonstandard_attr("httponly") is not None
-        raw_header = str(cookie._rest) if hasattr(cookie, "_rest") else {}
-        has_httponly = "HttpOnly" in raw_header or "httponly" in {k.lower() for k in raw_header}
+        rest = cookie._rest if hasattr(cookie, "_rest") else {}
+        has_httponly = any(k.lower() == "httponly" for k in rest)
         if not has_httponly:
             flags_missing.append("HttpOnly")
 
